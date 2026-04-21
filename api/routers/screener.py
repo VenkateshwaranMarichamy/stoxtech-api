@@ -17,6 +17,9 @@ from indicator_engine import IndicatorEngine
 from data_ingestion import UpstoxClient, OHLCVWriter, fetch_and_store
 from api.schemas import (
     IndicatorSnapshot,
+    IndicatorQueryRequest,
+    IndicatorQueryResponse,
+    IndicatorQueryItem,
     JobStatusResponse,
     StockListItem,
     StocksListResponse,
@@ -199,7 +202,19 @@ def get_latest_indicators(ticker_id: int):
         with conn.cursor(cursor_factory=psycopg2.extras.RealDictCursor) as cur:
             cur.execute(
                 """
-                SELECT * FROM technical.stock_indicators
+                SELECT ticker_id, trade_date,
+                       computed_at::date AS computed_date,
+                       close, high_52w, low_52w, high_ytd, low_ytd,
+                       pct_from_52w_high, pct_from_52w_low,
+                       sma_20, sma_50, sma_100, sma_200,
+                       ema_9, ema_21, ema_50, ema_200,
+                       macd_line, macd_signal, macd_histogram,
+                       golden_cross_event, death_cross_event, golden_cross_state,
+                       adx_14, rsi_14, stoch_k, stoch_d, cci_20, williams_r_14, roc_10,
+                       bb_upper, bb_middle, bb_lower, atr_14, stddev_20, hist_volatility_20,
+                       avg_volume_1m, avg_volume_1y, volume_ratio, obv, vwap,
+                       pivot_point, pivot_support_1, pivot_resistance_1
+                FROM technical.stock_indicators
                 WHERE ticker_id = %s
                 ORDER BY trade_date DESC
                 LIMIT 1;
@@ -262,7 +277,19 @@ def get_indicator_history(
         with conn.cursor(cursor_factory=psycopg2.extras.RealDictCursor) as cur:
             cur.execute(
                 """
-                SELECT * FROM technical.stock_indicators
+                SELECT ticker_id, trade_date,
+                       computed_at::date AS computed_date,
+                       close, high_52w, low_52w, high_ytd, low_ytd,
+                       pct_from_52w_high, pct_from_52w_low,
+                       sma_20, sma_50, sma_100, sma_200,
+                       ema_9, ema_21, ema_50, ema_200,
+                       macd_line, macd_signal, macd_histogram,
+                       golden_cross_event, death_cross_event, golden_cross_state,
+                       adx_14, rsi_14, stoch_k, stoch_d, cci_20, williams_r_14, roc_10,
+                       bb_upper, bb_middle, bb_lower, atr_14, stddev_20, hist_volatility_20,
+                       avg_volume_1m, avg_volume_1y, volume_ratio, obv, vwap,
+                       pivot_point, pivot_support_1, pivot_resistance_1
+                FROM technical.stock_indicators
                 WHERE ticker_id = %s
                   AND trade_date BETWEEN %s AND %s
                 ORDER BY trade_date DESC;
@@ -274,6 +301,87 @@ def get_indicator_history(
         conn.close()
 
     return [IndicatorSnapshot(**dict(row)) for row in rows]
+
+
+# ---------------------------------------------------------------------------
+# POST /screener/indicators/query
+# ---------------------------------------------------------------------------
+
+@router.post(
+    "/indicators/query",
+    response_model=IndicatorQueryResponse,
+    summary="Bulk indicator lookup for one or more stocks",
+    tags=["Indicators"],
+)
+def query_indicators(body: IndicatorQueryRequest):
+    """
+    Return the latest indicator snapshot for one or more stocks in a single request.
+
+    **Request body:**
+    ```json
+    { "ticker_ids": [64, 5319, 42] }
+    ```
+    Pass a single-element list for one stock: `{ "ticker_ids": [5319] }`
+
+    **Response includes:**
+    - `requested` — number of ticker_ids sent
+    - `found` — number that had indicator data
+    - `not_found` — list of ticker_ids with no data
+    - `results` — full indicator snapshot per stock, including:
+      - `ticker_id`, `trade_date`, `computed_at`
+      - All ~35 indicator values
+
+    **Notes:**
+    - Returns the most recent `trade_date` row per stock.
+    - Stocks with no data appear in `not_found` — no HTTP 404 is raised.
+    - Results are ordered by `ticker_id` ascending.
+    - Duplicate `ticker_ids` in the request are deduplicated automatically.
+    """
+    if not body.ticker_ids:
+        raise HTTPException(status_code=400, detail="ticker_ids list cannot be empty.")
+
+    unique_ids = sorted(set(body.ticker_ids))
+
+    conn = get_connection()
+    try:
+        with conn.cursor(cursor_factory=psycopg2.extras.RealDictCursor) as cur:
+            # Fetch the latest indicator row per ticker_id in one query
+            cur.execute(
+                """
+                SELECT DISTINCT ON (ticker_id)
+                    ticker_id, trade_date,
+                    computed_at::date AS computed_date,
+                    close, high_52w, low_52w, high_ytd, low_ytd,
+                    pct_from_52w_high, pct_from_52w_low,
+                    sma_20, sma_50, sma_100, sma_200,
+                    ema_9, ema_21, ema_50, ema_200,
+                    macd_line, macd_signal, macd_histogram,
+                    golden_cross_event, death_cross_event, golden_cross_state,
+                    adx_14,
+                    rsi_14, stoch_k, stoch_d, cci_20, williams_r_14, roc_10,
+                    bb_upper, bb_middle, bb_lower, atr_14, stddev_20, hist_volatility_20,
+                    avg_volume_1m, avg_volume_1y, volume_ratio, obv, vwap,
+                    pivot_point, pivot_support_1, pivot_resistance_1
+                FROM technical.stock_indicators
+                WHERE ticker_id = ANY(%s)
+                ORDER BY ticker_id ASC, trade_date DESC;
+                """,
+                (unique_ids,),
+            )
+            rows = cur.fetchall()
+    finally:
+        conn.close()
+
+    found_ids = {row["ticker_id"] for row in rows}
+    not_found = [tid for tid in unique_ids if tid not in found_ids]
+    results   = [IndicatorQueryItem(**dict(row)) for row in rows]
+
+    return IndicatorQueryResponse(
+        requested=len(unique_ids),
+        found=len(results),
+        not_found=not_found,
+        results=results,
+    )
 
 
 # ---------------------------------------------------------------------------

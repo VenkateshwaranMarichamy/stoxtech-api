@@ -10,7 +10,7 @@ from pydantic import BaseModel
 class IndicatorSnapshot(BaseModel):
     ticker_id: int
     trade_date: date
-    computed_at: datetime
+    computed_date: date
 
     # Price levels
     close: Decimal | None = None
@@ -107,3 +107,76 @@ class JobStatusResponse(BaseModel):
     error: str | None = None
     created_at: datetime
     completed_at: datetime | None = None
+
+
+class IndicatorQueryRequest(BaseModel):
+    """Request body for POST /screener/indicators/query"""
+    ticker_ids: list[int]
+
+    model_config = {
+        "json_schema_extra": {
+            "examples": [
+                {"ticker_ids": [64, 5319, 42]},
+            ]
+        }
+    }
+
+
+class IndicatorQueryItem(BaseModel):
+    """One stock's result row returned by POST /screener/indicators/query"""
+    ticker_id: int
+    trade_date: date
+    computed_date: date
+
+    close: Decimal | None = None
+    high_52w: Decimal | None = None
+    low_52w: Decimal | None = None
+    high_ytd: Decimal | None = None
+    low_ytd: Decimal | None = None
+    pct_from_52w_high: Decimal | None = None
+    pct_from_52w_low: Decimal | None = None
+    sma_20: Decimal | None = None
+    sma_50: Decimal | None = None
+    sma_100: Decimal | None = None
+    sma_200: Decimal | None = None
+    ema_9: Decimal | None = None
+    ema_21: Decimal | None = None
+    ema_50: Decimal | None = None
+    ema_200: Decimal | None = None
+    macd_line: Decimal | None = None
+    macd_signal: Decimal | None = None
+    macd_histogram: Decimal | None = None
+    golden_cross_event: bool | None = None
+    death_cross_event: bool | None = None
+    golden_cross_state: str | None = None
+    adx_14: Decimal | None = None
+    rsi_14: Decimal | None = None
+    stoch_k: Decimal | None = None
+    stoch_d: Decimal | None = None
+    cci_20: Decimal | None = None
+    williams_r_14: Decimal | None = None
+    roc_10: Decimal | None = None
+    bb_upper: Decimal | None = None
+    bb_middle: Decimal | None = None
+    bb_lower: Decimal | None = None
+    atr_14: Decimal | None = None
+    stddev_20: Decimal | None = None
+    hist_volatility_20: Decimal | None = None
+    avg_volume_1m: Decimal | None = None
+    avg_volume_1y: Decimal | None = None
+    volume_ratio: Decimal | None = None
+    obv: int | None = None
+    vwap: Decimal | None = None
+    pivot_point: Decimal | None = None
+    pivot_support_1: Decimal | None = None
+    pivot_resistance_1: Decimal | None = None
+
+    model_config = {"from_attributes": True}
+
+
+class IndicatorQueryResponse(BaseModel):
+    """Response for POST /screener/indicators/query"""
+    requested: int
+    found: int
+    not_found: list[int]
+    results: list[IndicatorQueryItem]
