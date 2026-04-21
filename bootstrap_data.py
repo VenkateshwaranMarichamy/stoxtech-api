@@ -63,12 +63,12 @@ def load_instrument_keys(exchange_filter: str | None) -> list[str]:
             if exchange_filter:
                 cur.execute(
                     "SELECT instrument_key FROM classification.ticker_symbol "
-                    "WHERE instrument_key LIKE %s ORDER BY instrument_key;",
+                    "WHERE instrument_key LIKE %s ORDER BY id ASC;",
                     (f"{exchange_filter}|%",),
                 )
             else:
                 cur.execute(
-                    "SELECT instrument_key FROM classification.ticker_symbol ORDER BY instrument_key;"
+                    "SELECT instrument_key FROM classification.ticker_symbol ORDER BY id ASC;"
                 )
             return [row["instrument_key"] for row in cur.fetchall()]
     finally:

@@ -4,6 +4,7 @@ Screener router — all /screener/* endpoints.
 
 import os
 import uuid
+import logging
 from datetime import date, datetime, timedelta
 from typing import Optional
 
@@ -22,6 +23,7 @@ from api.schemas import (
 )
 
 router = APIRouter()
+log = logging.getLogger("screener")
 
 
 # ---------------------------------------------------------------------------
@@ -87,12 +89,31 @@ def _get_job(job_id: str) -> dict | None:
 # GET /screener/stocks
 # ---------------------------------------------------------------------------
 
-@router.get("/stocks", response_model=StocksListResponse)
+@router.get(
+    "/stocks",
+    response_model=StocksListResponse,
+    summary="List active stocks with latest indicators",
+    tags=["Screener"],
+)
 def list_stocks(
-    page: int = Query(default=1, ge=1),
-    page_size: int = Query(default=config.API_DEFAULT_PAGE_SIZE, ge=1),
+    page: int = Query(default=1, ge=1, description="Page number (1-based)"),
+    page_size: int = Query(
+        default=config.API_DEFAULT_PAGE_SIZE, ge=1,
+        description=f"Results per page (max {config.API_MAX_PAGE_SIZE})",
+    ),
 ):
-    """Return paginated list of active stocks with their latest indicator snapshot."""
+    """
+    Return a paginated list of all stocks where `is_screener_active = true`,
+    each with their most recent indicator snapshot.
+
+    **Fields returned per stock:**
+    `ticker_id`, `trade_date`, `close`, `rsi_14`, `sma_50`, `sma_200`,
+    `golden_cross_state`, `high_52w`, `low_52w`, `pct_from_52w_high`, `volume_ratio`
+
+    **Pagination:** use `page` and `page_size`. Response includes `total` count.
+
+    **Error:** HTTP 400 if `page_size` exceeds the maximum allowed value.
+    """
     if page_size > config.API_MAX_PAGE_SIZE:
         raise HTTPException(
             status_code=400,
@@ -156,9 +177,23 @@ def list_stocks(
 # GET /screener/indicators/{ticker_id}
 # ---------------------------------------------------------------------------
 
-@router.get("/indicators/{ticker_id}", response_model=IndicatorSnapshot)
+@router.get(
+    "/indicators/{ticker_id}",
+    response_model=IndicatorSnapshot,
+    summary="Latest indicator snapshot for a stock",
+    tags=["Indicators"],
+)
 def get_latest_indicators(ticker_id: int):
-    """Return the most recent indicator snapshot for a stock."""
+    """
+    Return the most recently computed indicator snapshot for a single stock.
+
+    **Path parameter:**
+    - `ticker_id` — integer PK from `classification.ticker_symbol.id`
+
+    **Returns:** all ~35 computed indicators for the latest `trade_date`.
+
+    **Error:** HTTP 404 if no indicator data exists for the given `ticker_id`.
+    """
     conn = get_connection()
     try:
         with conn.cursor(cursor_factory=psycopg2.extras.RealDictCursor) as cur:
@@ -187,13 +222,36 @@ def get_latest_indicators(ticker_id: int):
 # GET /screener/indicators/{ticker_id}/history
 # ---------------------------------------------------------------------------
 
-@router.get("/indicators/{ticker_id}/history", response_model=list[IndicatorSnapshot])
+@router.get(
+    "/indicators/{ticker_id}/history",
+    response_model=list[IndicatorSnapshot],
+    summary="Historical indicators for a stock",
+    tags=["Indicators"],
+)
 def get_indicator_history(
     ticker_id: int,
-    from_date: Optional[date] = Query(default=None),
-    to_date: Optional[date] = Query(default=None),
+    from_date: Optional[date] = Query(
+        default=None,
+        description=f"Start date (YYYY-MM-DD). Defaults to {config.API_DEFAULT_HISTORY_DAYS} days before to_date.",
+    ),
+    to_date: Optional[date] = Query(
+        default=None,
+        description="End date (YYYY-MM-DD). Defaults to today.",
+    ),
 ):
-    """Return historical indicator values for a stock within a date range."""
+    """
+    Return indicator rows for a stock within a date range, ordered newest first.
+
+    **Path parameter:**
+    - `ticker_id` — integer PK from `classification.ticker_symbol.id`
+
+    **Query parameters:**
+    - `from_date` — start of range (inclusive). Defaults to 30 days before `to_date`.
+    - `to_date` — end of range (inclusive). Defaults to today.
+
+    **Returns:** list of indicator snapshots, one per trading day in the range.
+    Returns an empty list if no data exists for the range (no 404).
+    """
     if to_date is None:
         to_date = date.today()
     if from_date is None:
@@ -219,20 +277,202 @@ def get_indicator_history(
 
 
 # ---------------------------------------------------------------------------
-# POST /screener/sync
-# Fetches latest OHLCV from Upstox for all active stocks, then recomputes
-# indicators. Equivalent to running sync_daily.py via the API.
+# POST /screener/fetch-ohlcv
 # ---------------------------------------------------------------------------
 
-@router.post("/sync", status_code=202)
-def trigger_sync(
+@router.post(
+    "/fetch-ohlcv",
+    status_code=202,
+    summary="Fetch OHLCV candles from Upstox",
+    tags=["Data Pipeline"],
+)
+def fetch_ohlcv(
     background_tasks: BackgroundTasks,
-    days: int = Query(default=365, ge=1, le=365,
-                      description="How many calendar days of history to fetch (max 365)"),
+    from_date: date = Query(description="Start date (YYYY-MM-DD)"),
+    to_date: date   = Query(description="End date (YYYY-MM-DD). Use the same date as from_date to fetch a single day."),
+    ticker_id: Optional[int] = Query(
+        default=None,
+        description="Fetch a single stock by ticker_id. Omit to fetch all active stocks.",
+    ),
 ):
     """
-    Fetch OHLCV from Upstox for all active stocks then recompute indicators.
-    Returns a job_id to poll for status.
+    Pull daily OHLCV candles from the Upstox v2 API and store them in
+    `technical.ohlcv_daily`.
+
+    **Upstox URL called:**
+    ```
+    GET https://api.upstox.com/v2/historical-candle/{instrument_key}/day/{to_date}/{from_date}
+    ```
+
+    **Query parameters:**
+    - `from_date` — start of the date range to fetch (inclusive).
+    - `to_date` — end of the date range to fetch (inclusive).
+      Pass the same value as `from_date` to fetch a single trading day.
+    - `ticker_id` *(optional)* — if provided, fetches only that stock.
+      If omitted, fetches all stocks where `is_screener_active = true`, ordered by `id`.
+
+    **Behaviour:**
+    - Runs asynchronously in the background. Returns HTTP 202 immediately.
+    - Existing rows for the same `(ticker_id, trade_date)` are skipped (`ON CONFLICT DO NOTHING`).
+    - Poll the returned `job_id` at `GET /screener/recalculate/{job_id}` for status.
+
+    **Errors:**
+    - HTTP 400 if `from_date` is after `to_date`.
+    - HTTP 404 if the provided `ticker_id` does not exist.
+    - HTTP 500 if the Upstox token is not configured.
+
+    **Note:** this endpoint only fetches and stores raw OHLCV data.
+    To recompute indicators after fetching, call `POST /screener/recalculate`.
+    """
+    if from_date > to_date:
+        raise HTTPException(
+            status_code=400,
+            detail="from_date cannot be after to_date.",
+        )
+
+    token = os.getenv(config.UPSTOX_ACCESS_TOKEN_ENV)
+    if not token:
+        raise HTTPException(
+            status_code=500,
+            detail=f"Upstox token not configured ({config.UPSTOX_ACCESS_TOKEN_ENV} missing)",
+        )
+
+    if ticker_id is not None:
+        conn = get_connection()
+        try:
+            with conn.cursor() as cur:
+                cur.execute(
+                    "SELECT instrument_key FROM classification.ticker_symbol WHERE id = %s;",
+                    (ticker_id,),
+                )
+                row = cur.fetchone()
+        finally:
+            conn.close()
+        if row is None:
+            raise HTTPException(status_code=404, detail=f"ticker_id {ticker_id} not found.")
+
+    job_id = str(uuid.uuid4())
+    _create_job(job_id)
+    background_tasks.add_task(
+        _run_fetch_ohlcv, job_id, token,
+        from_date.isoformat(), to_date.isoformat(),
+        ticker_id,
+    )
+    scope = f"ticker_id={ticker_id}" if ticker_id else "all active stocks"
+    return {
+        "job_id":    job_id,
+        "status":    "pending",
+        "from_date": from_date.isoformat(),
+        "to_date":   to_date.isoformat(),
+        "scope":     scope,
+    }
+
+
+def _run_fetch_ohlcv(
+    job_id: str,
+    token: str,
+    from_date: str,
+    to_date: str,
+    ticker_id: int | None,
+) -> None:
+    """Background task: fetch OHLCV from Upstox and store in ohlcv_daily."""
+    _update_job(job_id, status="running")
+
+    try:
+        conn = get_connection()
+        try:
+            with conn.cursor(cursor_factory=psycopg2.extras.DictCursor) as cur:
+                if ticker_id is not None:
+                    cur.execute(
+                        "SELECT id, instrument_key FROM classification.ticker_symbol "
+                        "WHERE id = %s;",
+                        (ticker_id,),
+                    )
+                else:
+                    cur.execute(
+                        "SELECT id, instrument_key FROM classification.ticker_symbol "
+                        "WHERE is_screener_active = TRUE ORDER BY id ASC;"
+                    )
+                stocks = [{"id": r["id"], "instrument_key": r["instrument_key"]}
+                          for r in cur.fetchall()]
+        finally:
+            conn.close()
+
+        log.info(
+            "fetch-ohlcv job %s: %d stock(s) | %s → %s | "
+            "GET %s/historical-candle/<key>/day/%s/%s",
+            job_id, len(stocks), from_date, to_date,
+            config.UPSTOX_BASE_URL, to_date, from_date,
+        )
+
+        client = UpstoxClient(token)
+        writer = OHLCVWriter()
+        updated = failed = 0
+
+        for stock in stocks:
+            try:
+                records = client.get_historical_daily(
+                    stock["instrument_key"], to_date, from_date
+                )
+                if records:
+                    writer.upsert_batch(stock["id"], records)
+                    updated += 1
+                    log.debug(
+                        "Stored %d records for %s (id=%d)",
+                        len(records), stock["instrument_key"], stock["id"],
+                    )
+                else:
+                    log.debug("No records for %s", stock["instrument_key"])
+            except Exception as exc:
+                log.error("Failed %s: %s", stock["instrument_key"], exc, exc_info=True)
+                failed += 1
+
+        log.info("fetch-ohlcv job %s done — updated=%d failed=%d", job_id, updated, failed)
+        _update_job(job_id, status="completed", stocks_processed=updated)
+
+    except Exception as exc:
+        _update_job(job_id, status="failed", error=str(exc))
+
+
+# ---------------------------------------------------------------------------
+# POST /screener/sync
+# ---------------------------------------------------------------------------
+
+@router.post(
+    "/sync",
+    status_code=202,
+    summary="Fetch OHLCV then recompute indicators (full pipeline)",
+    tags=["Data Pipeline"],
+)
+def trigger_sync(
+    background_tasks: BackgroundTasks,
+    days: int = Query(
+        default=365, ge=1, le=365,
+        description="Number of calendar days of history to fetch from Upstox (max 365 ≈ 252 trading days).",
+    ),
+):
+    """
+    Run the full daily pipeline in one call:
+
+    1. Fetch OHLCV candles from Upstox for all `is_screener_active = true` stocks.
+    2. Upsert candles into `technical.ohlcv_daily`.
+    3. Recompute all ~35 indicators and upsert into `technical.stock_indicators`.
+
+    **Query parameters:**
+    - `days` — how many calendar days back to fetch (default 365, max 365).
+      365 calendar days ≈ 252 trading days (1 year of market data).
+
+    **Upstox URL called per stock:**
+    ```
+    GET https://api.upstox.com/v2/historical-candle/{instrument_key}/day/{today}/{today-days}
+    ```
+
+    **Behaviour:**
+    - Runs asynchronously. Returns HTTP 202 immediately with a `job_id`.
+    - Poll status at `GET /screener/recalculate/{job_id}`.
+    - Equivalent to running `python sync_daily.py` from the command line.
+
+    **Error:** HTTP 500 if the Upstox token is not configured.
     """
     token = os.getenv(config.UPSTOX_ACCESS_TOKEN_ENV)
     if not token:
@@ -244,21 +484,23 @@ def trigger_sync(
     job_id = str(uuid.uuid4())
     _create_job(job_id)
     background_tasks.add_task(_run_sync, job_id, token, days)
-    return {"job_id": job_id, "status": "pending",
-            "message": f"Fetching last {days} calendar days of OHLCV then recomputing indicators"}
+    return {
+        "job_id":  job_id,
+        "status":  "pending",
+        "message": f"Fetching last {days} calendar days of OHLCV then recomputing indicators",
+    }
 
 
 def _run_sync(job_id: str, token: str, days: int) -> None:
     """Background task: fetch OHLCV from Upstox then run indicator engine."""
     _update_job(job_id, status="running")
     try:
-        # Load active instrument keys
         conn = get_connection()
         try:
             with conn.cursor(cursor_factory=psycopg2.extras.DictCursor) as cur:
                 cur.execute(
                     "SELECT instrument_key FROM classification.ticker_symbol "
-                    "WHERE is_screener_active = TRUE;"
+                    "WHERE is_screener_active = TRUE ORDER BY id ASC;"
                 )
                 keys = [row["instrument_key"] for row in cur.fetchall()]
         finally:
@@ -267,10 +509,8 @@ def _run_sync(job_id: str, token: str, days: int) -> None:
         to_date   = date.today().isoformat()
         from_date = (date.today() - timedelta(days=days)).isoformat()
 
-        import logging
-        log = logging.getLogger("sync_job")
         log.info(
-            "Sync job %s: fetching %d active stocks | URL pattern: "
+            "Sync job %s: %d active stocks | "
             "GET %s/historical-candle/<key>/day/%s/%s",
             job_id, len(keys), config.UPSTOX_BASE_URL, to_date, from_date,
         )
@@ -278,14 +518,12 @@ def _run_sync(job_id: str, token: str, days: int) -> None:
         client = UpstoxClient(token)
         writer = OHLCVWriter()
         updated, failed = fetch_and_store(client, writer, keys, to_date, from_date)
-
         log.info("Sync job %s: OHLCV done — updated=%d failed=%d", job_id, updated, failed)
 
-        # Recompute indicators
         engine = IndicatorEngine()
         processed, errors = engine.run_all_active()
-
         _update_job(job_id, status="completed", stocks_processed=processed)
+
     except Exception as exc:
         _update_job(job_id, status="failed", error=str(exc))
 
@@ -294,9 +532,37 @@ def _run_sync(job_id: str, token: str, days: int) -> None:
 # POST /screener/recalculate
 # ---------------------------------------------------------------------------
 
-@router.post("/recalculate", status_code=202)
+@router.post(
+    "/recalculate",
+    status_code=202,
+    summary="Recompute indicators from existing OHLCV data",
+    tags=["Data Pipeline"],
+)
 def trigger_recalculate(background_tasks: BackgroundTasks):
-    """Trigger async recalculation of indicators for all active stocks."""
+    """
+    Recompute all ~35 technical indicators for every `is_screener_active = true`
+    stock using OHLCV data already stored in `technical.ohlcv_daily`.
+
+    **Does NOT fetch new data from Upstox.** To fetch fresh candles first,
+    use `POST /screener/fetch-ohlcv` or `POST /screener/sync`.
+
+    **Indicators computed per stock:**
+    - Price levels: close, 52w high/low, YTD high/low, % from 52w high/low
+    - Moving averages: SMA 20/50/100/200, EMA 9/21/50/200
+    - MACD: line, signal, histogram
+    - Cross signals: golden cross / death cross event + state
+    - Trend: ADX 14
+    - Momentum: RSI 14, Stochastic %K/%D, CCI 20, Williams %R 14, ROC 10
+    - Volatility: Bollinger Bands, ATR 14, StdDev 20, Historical Volatility 20
+    - Volume: avg 1m/1y, volume ratio, OBV, VWAP
+    - Pivot points: pivot, support 1, resistance 1
+
+    **Behaviour:**
+    - Runs asynchronously. Returns HTTP 202 immediately with a `job_id`.
+    - Each stock's row in `stock_indicators` is updated in place (`ON CONFLICT DO UPDATE`).
+    - Stocks are processed in ascending `id` order.
+    - Poll status at `GET /screener/recalculate/{job_id}`.
+    """
     job_id = str(uuid.uuid4())
     _create_job(job_id)
     background_tasks.add_task(_run_recalculate, job_id)
@@ -317,9 +583,28 @@ def _run_recalculate(job_id: str) -> None:
 # GET /screener/recalculate/{job_id}
 # ---------------------------------------------------------------------------
 
-@router.get("/recalculate/{job_id}", response_model=JobStatusResponse)
+@router.get(
+    "/recalculate/{job_id}",
+    response_model=JobStatusResponse,
+    summary="Poll job status",
+    tags=["Data Pipeline"],
+)
 def get_job_status(job_id: str):
-    """Return the current status of a recalculation job."""
+    """
+    Return the current status of any background job created by
+    `/screener/fetch-ohlcv`, `/screener/sync`, or `/screener/recalculate`.
+
+    **Path parameter:**
+    - `job_id` — UUID returned by the job-creating endpoint.
+
+    **Status values:**
+    - `pending` — job queued, not yet started
+    - `running` — job is actively processing
+    - `completed` — job finished successfully; `stocks_processed` shows the count
+    - `failed` — job encountered a fatal error; `error` contains the message
+
+    **Error:** HTTP 404 if the `job_id` does not exist.
+    """
     job = _get_job(job_id)
     if job is None:
         raise HTTPException(status_code=404, detail=f"Job not found: {job_id}")

@@ -38,12 +38,13 @@ def main() -> int:
         )
         return 1
 
-    # Load active instrument keys
+    # Load active instrument keys ordered by id
     conn = get_connection()
     try:
         with conn.cursor(cursor_factory=psycopg2.extras.DictCursor) as cur:
             cur.execute(
-                "SELECT instrument_key FROM classification.ticker_symbol WHERE is_screener_active = TRUE;"
+                "SELECT instrument_key FROM classification.ticker_symbol "
+                "WHERE is_screener_active = TRUE ORDER BY id ASC;"
             )
             keys = [row["instrument_key"] for row in cur.fetchall()]
     except Exception as exc:

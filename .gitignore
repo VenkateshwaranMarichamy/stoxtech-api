@@ -11,3 +11,4 @@ stk_fund/
 *.egg-info/
 dist/
 build/
+Makefile

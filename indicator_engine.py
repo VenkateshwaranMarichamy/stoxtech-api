@@ -365,7 +365,8 @@ class IndicatorEngine:
         try:
             with conn.cursor(cursor_factory=psycopg2.extras.DictCursor) as cur:
                 cur.execute(
-                    "SELECT id, instrument_key FROM classification.ticker_symbol WHERE is_screener_active = TRUE;"
+                    "SELECT id, instrument_key FROM classification.ticker_symbol "
+                    "WHERE is_screener_active = TRUE ORDER BY id ASC;"
                 )
                 stocks = [{"ticker_id": row["id"], "instrument_key": row["instrument_key"]}
                           for row in cur.fetchall()]

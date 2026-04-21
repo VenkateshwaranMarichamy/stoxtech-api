@@ -18,8 +18,39 @@ logger = setup_logging("api")
 
 app = FastAPI(
     title="stk_fund Screener API",
-    description="Technical indicator screener for NSE/BSE stocks.",
+    description="""
+## Stock Technical Screener API
+
+Backend-for-Frontend (BFF) that serves pre-computed technical indicators
+for NSE/BSE stocks stored in PostgreSQL.
+
+### Workflow
+
+```
+1. POST /screener/fetch-ohlcv   → pull candles from Upstox into ohlcv_daily
+2. POST /screener/recalculate   → compute ~35 indicators from ohlcv_daily
+3. GET  /screener/stocks        → browse active stocks with latest indicators
+4. GET  /screener/indicators/{ticker_id} → full indicator snapshot for one stock
+```
+
+### Job Polling
+
+`/screener/fetch-ohlcv`, `/screener/sync`, and `/screener/recalculate` all
+return a `job_id` immediately (HTTP 202). Poll the job status at:
+
+```
+GET /screener/recalculate/{job_id}
+```
+
+Status values: `pending` → `running` → `completed` | `failed`
+
+### Rate Limits (Upstox)
+- 50 requests/second, 2 000 requests/30 minutes
+- Bulk fetches are automatically chunked and paced
+""",
     version="1.0.0",
+    contact={"name": "stk_fund"},
+    license_info={"name": "Private"},
 )
 
 # ---------------------------------------------------------------------------
