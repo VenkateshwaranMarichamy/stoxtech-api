@@ -633,8 +633,21 @@ def _run_sync(job_id: str, token: str, days: int) -> None:
 
         engine = IndicatorEngine()
         processed, errors = engine.run_all_active()
-        _update_job(job_id, status="completed", stocks_processed=processed)
 
+        # Refresh stock classifications via stored procedure
+        try:
+            log.info("Job %s: calling analytics.sp_refresh_classifications()...", job_id)
+            conn = get_connection()
+            with conn:
+                with conn.cursor() as cur:
+                    cur.execute("CALL analytics.sp_refresh_classifications()")
+            conn.close()
+            log.info("Job %s: stock classifications refreshed.", job_id)
+        except Exception as exc:
+            log.error("Job %s: failed to refresh classifications: %s", job_id, exc, exc_info=True)
+            # Non-fatal — indicators were still computed successfully
+
+        _update_job(job_id, status="completed", stocks_processed=processed)
     except Exception as exc:
         _update_job(job_id, status="failed", error=str(exc))
 
@@ -685,6 +698,20 @@ def _run_recalculate(job_id: str) -> None:
     try:
         engine = IndicatorEngine()
         processed, errors = engine.run_all_active()
+
+        # Refresh stock classifications via stored procedure
+        try:
+            log.info("Job %s: calling analytics.sp_refresh_classifications()...", job_id)
+            conn = get_connection()
+            with conn:
+                with conn.cursor() as cur:
+                    cur.execute("CALL analytics.sp_refresh_classifications()")
+            conn.close()
+            log.info("Job %s: stock classifications refreshed.", job_id)
+        except Exception as exc:
+            log.error("Job %s: failed to refresh classifications: %s", job_id, exc, exc_info=True)
+            # Non-fatal — indicators were still computed successfully
+
         _update_job(job_id, status="completed", stocks_processed=processed)
     except Exception as exc:
         _update_job(job_id, status="failed", error=str(exc))

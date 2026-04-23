@@ -74,6 +74,19 @@ def main() -> int:
     processed, errors = engine.run_all_active()
     logger.info("Indicators: %d processed, %d errors.", processed, errors)
 
+    # Refresh stock classifications via stored procedure
+    try:
+        logger.info("Calling analytics.sp_refresh_classifications()...")
+        conn = get_connection()
+        with conn:
+            with conn.cursor() as cur:
+                cur.execute("CALL analytics.sp_refresh_classifications()")
+        conn.close()
+        logger.info("Stock classifications refreshed.")
+    except Exception as exc:
+        logger.error("Failed to refresh classifications: %s", exc, exc_info=True)
+        # Non-fatal — sync still succeeded
+
     elapsed = time.time() - start
     logger.info("Daily sync job completed in %.1fs.", elapsed)
     return 0
