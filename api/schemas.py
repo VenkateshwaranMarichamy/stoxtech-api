@@ -12,6 +12,11 @@ class IndicatorSnapshot(BaseModel):
     trade_date: date
     computed_date: date
 
+    # OHLCV data range
+    last_close: Decimal | None = None
+    ohlcv_start_date: date | None = None
+    ohlcv_end_date: date | None = None
+
     # Price levels
     close: Decimal | None = None
     high_52w: Decimal | None = None
@@ -127,6 +132,11 @@ class IndicatorQueryItem(BaseModel):
     ticker_id: int
     trade_date: date
     computed_date: date
+
+    # OHLCV data range
+    last_close: Decimal | None = None
+    ohlcv_start_date: date | None = None
+    ohlcv_end_date: date | None = None
 
     close: Decimal | None = None
     high_52w: Decimal | None = None

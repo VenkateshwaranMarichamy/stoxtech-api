@@ -102,6 +102,10 @@ class IndicatorEngine:
         low = df["low"].astype(float)
         volume = df["volume"].astype(float)
 
+        result["last_close"]       = _safe_float(close.iloc[-1])
+        result["ohlcv_start_date"] = df["trade_date"].iloc[0]
+        result["ohlcv_end_date"]   = df["trade_date"].iloc[-1]
+
         # ---- Price levels ------------------------------------------------
         result["close"] = _safe_float(close.iloc[-1])
 

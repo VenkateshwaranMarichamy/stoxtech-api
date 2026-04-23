@@ -204,6 +204,7 @@ def get_latest_indicators(ticker_id: int):
                 """
                 SELECT ticker_id, trade_date,
                        computed_at::date AS computed_date,
+                       last_close, ohlcv_start_date, ohlcv_end_date,
                        close, high_52w, low_52w, high_ytd, low_ytd,
                        pct_from_52w_high, pct_from_52w_low,
                        sma_20, sma_50, sma_100, sma_200,
@@ -279,6 +280,7 @@ def get_indicator_history(
                 """
                 SELECT ticker_id, trade_date,
                        computed_at::date AS computed_date,
+                       last_close, ohlcv_start_date, ohlcv_end_date,
                        close, high_52w, low_52w, high_ytd, low_ytd,
                        pct_from_52w_high, pct_from_52w_low,
                        sma_20, sma_50, sma_100, sma_200,
@@ -351,6 +353,7 @@ def query_indicators(body: IndicatorQueryRequest):
                 SELECT DISTINCT ON (ticker_id)
                     ticker_id, trade_date,
                     computed_at::date AS computed_date,
+                    last_close, ohlcv_start_date, ohlcv_end_date,
                     close, high_52w, low_52w, high_ytd, low_ytd,
                     pct_from_52w_high, pct_from_52w_low,
                     sma_20, sma_50, sma_100, sma_200,
