@@ -30,17 +30,17 @@ from datetime import date
 
 import psycopg2.extras
 
-import config
-from db import get_connection
-from data_ingestion import (
+import app.config as config
+from app.db import get_connection
+from app.data_ingestion import (
     UpstoxClient,
     OHLCVWriter,
     ActiveStockUpdater,
     AuthError,
     fetch_and_store_chunked,
 )
-from indicator_engine import IndicatorEngine
-from logging_setup import setup_logging
+from app.indicator_engine import IndicatorEngine
+from app.logging_setup import setup_logging
 
 logger = setup_logging("bootstrap_data")
 

@@ -4,7 +4,7 @@ import logging
 import os
 from logging.handlers import RotatingFileHandler
 
-from config import LOG_DIR, LOG_MAX_BYTES, LOG_BACKUP_COUNT
+from app.config import LOG_DIR, LOG_MAX_BYTES, LOG_BACKUP_COUNT
 
 _FORMAT = "%(asctime)s | %(levelname)-8s | %(name)s | %(message)s"
 

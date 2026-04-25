@@ -16,9 +16,9 @@ from datetime import date
 import requests
 import psycopg2.extras
 
-import config
-from db import get_connection
-from logging_setup import setup_logging
+import app.config as config
+from app.db import get_connection
+from app.logging_setup import setup_logging
 
 logger = setup_logging("data_ingestion")
 

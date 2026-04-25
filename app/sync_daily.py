@@ -7,7 +7,7 @@ Usage:
     python sync_daily.py
 
 Cron (weekdays at 15:30 IST):
-    30 15 * * 1-5  /path/to/venv/bin/python /path/to/stk_fund/sync_daily.py
+    30 15 * * 1-5  /path/to/.venv/bin/python -m app.sync_daily
 """
 
 import os
@@ -17,11 +17,11 @@ from datetime import date
 
 import psycopg2.extras
 
-import config
-from db import get_connection
-from data_ingestion import UpstoxClient, OHLCVWriter, AuthError, fetch_and_store
-from indicator_engine import IndicatorEngine
-from logging_setup import setup_logging
+import app.config as config
+from app.db import get_connection
+from app.data_ingestion import UpstoxClient, OHLCVWriter, AuthError, fetch_and_store
+from app.indicator_engine import IndicatorEngine
+from app.logging_setup import setup_logging
 
 logger = setup_logging("sync_daily")
 

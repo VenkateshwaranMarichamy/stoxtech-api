@@ -2,7 +2,7 @@
 FastAPI BFF — stk_fund Screener API.
 
 Run with:
-    uvicorn api.main:app --reload --port 8004
+    uvicorn app.main:app --reload --host 0.0.0.0 --port 8004
 """
 
 import time
@@ -11,8 +11,8 @@ from fastapi import FastAPI, Request
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import JSONResponse
 
-from logging_setup import setup_logging
-from api.routers.screener import router as screener_router
+from app.logging_setup import setup_logging
+from app.routers.screener import router as screener_router
 
 logger = setup_logging("api")
 

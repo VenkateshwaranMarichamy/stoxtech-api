@@ -13,8 +13,8 @@ import pandas as pd
 import pandas_ta as ta
 import psycopg2.extras
 
-from db import get_connection
-from logging_setup import setup_logging
+from app.db import get_connection
+from app.logging_setup import setup_logging
 
 logger = setup_logging("indicator_engine")
 
