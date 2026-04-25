@@ -100,7 +100,7 @@ async def global_exception_handler(request: Request, exc: Exception):
 # ---------------------------------------------------------------------------
 # Routers
 # ---------------------------------------------------------------------------
-app.include_router(screener_router, prefix="/screener", tags=["screener"])
+app.include_router(screener_router, prefix="/screener")
 
 
 @app.get("/health")
