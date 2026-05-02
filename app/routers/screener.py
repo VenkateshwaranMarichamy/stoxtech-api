@@ -23,6 +23,8 @@ from app.schemas import (
     JobStatusResponse,
     StockListItem,
     StocksListResponse,
+    IndustryIndicatorItem,
+    IndustryIndicatorsResponse,
 )
 
 router = APIRouter()
@@ -384,6 +386,159 @@ def query_indicators(body: IndicatorQueryRequest):
         found=len(results),
         not_found=not_found,
         results=results,
+    )
+
+
+# ---------------------------------------------------------------------------
+# GET /screener/industry/{basic_ind_code}/indicators
+# ---------------------------------------------------------------------------
+
+@router.get(
+    "/industry/{basic_ind_code}/indicators",
+    response_model=IndustryIndicatorsResponse,
+    summary="Latest indicators for all stocks in a basic industry",
+    tags=["Screener"],
+)
+def get_industry_indicators(
+    basic_ind_code: str,
+    page: int = Query(default=1, ge=1, description="Page number (1-based)"),
+    page_size: int = Query(
+        default=config.API_DEFAULT_PAGE_SIZE, ge=1,
+        description=f"Results per page (max {config.API_MAX_PAGE_SIZE})",
+    ),
+):
+    """
+    Return the latest technical indicator snapshot for every stock that belongs
+    to the given basic industry code, with pagination.
+
+    **Path parameter:**
+    - `basic_ind_code` — industry code from `classification.company_classification`
+      e.g. `IN090103001`
+
+    **Query parameters:**
+    - `page` — page number, 1-based (default 1)
+    - `page_size` — results per page, max 500 (default 50)
+
+    **Response includes:**
+    - `total` — total stocks in this industry that have indicator data
+    - `stocks` — paginated list, each with `ticker_id`, `name`, and all ~35 indicators
+
+    **Errors:**
+    - HTTP 400 if `page_size` exceeds 500
+    - HTTP 404 if the `basic_ind_code` has no stocks with indicator data
+    """
+    if page_size > config.API_MAX_PAGE_SIZE:
+        raise HTTPException(
+            status_code=400,
+            detail=f"page_size cannot exceed {config.API_MAX_PAGE_SIZE}",
+        )
+
+    offset = (page - 1) * page_size
+
+    # Single optimised query:
+    #   1. Filter company_classification to the requested industry code
+    #   2. JOIN ticker_symbol to get the stock name
+    #   3. JOIN stock_indicators and use DISTINCT ON (ticker_id) ORDER BY trade_date DESC
+    #      to get the latest row per stock — one index scan per ticker, no correlated subquery
+    #   4. Wrap in a CTE so COUNT and paginated SELECT share the same filtered set
+    _SQL = """
+        WITH industry_latest AS (
+            SELECT DISTINCT ON (si.ticker_id)
+                ts.id                       AS ticker_id,
+                ts.name                     AS name,
+                si.trade_date,
+                si.computed_at::date        AS computed_date,
+                si.last_close,
+                si.ohlcv_start_date,
+                si.ohlcv_end_date,
+                si.close,
+                si.high_52w,
+                si.low_52w,
+                si.high_ytd,
+                si.low_ytd,
+                si.pct_from_52w_high,
+                si.pct_from_52w_low,
+                si.sma_20,
+                si.sma_50,
+                si.sma_100,
+                si.sma_200,
+                si.ema_9,
+                si.ema_21,
+                si.ema_50,
+                si.ema_200,
+                si.macd_line,
+                si.macd_signal,
+                si.macd_histogram,
+                si.golden_cross_event,
+                si.death_cross_event,
+                si.golden_cross_state,
+                si.adx_14,
+                si.rsi_14,
+                si.stoch_k,
+                si.stoch_d,
+                si.cci_20,
+                si.williams_r_14,
+                si.roc_10,
+                si.bb_upper,
+                si.bb_middle,
+                si.bb_lower,
+                si.atr_14,
+                si.stddev_20,
+                si.hist_volatility_20,
+                si.avg_volume_1m,
+                si.avg_volume_1y,
+                si.volume_ratio,
+                si.obv,
+                si.vwap,
+                si.pivot_point,
+                si.pivot_support_1,
+                si.pivot_resistance_1
+            FROM classification.company_classification cc
+            JOIN classification.ticker_symbol ts
+                ON ts.id = cc.company_id
+            JOIN technical.stock_indicators si
+                ON si.ticker_id = ts.id
+            WHERE cc.basic_ind_code = %(basic_ind_code)s
+            ORDER BY si.ticker_id, si.trade_date DESC
+        )
+        SELECT
+            (SELECT COUNT(*) FROM industry_latest) AS total,
+            il.*
+        FROM industry_latest il
+        ORDER BY il.ticker_id
+        LIMIT %(limit)s OFFSET %(offset)s;
+    """
+
+    conn = get_connection()
+    try:
+        with conn.cursor(cursor_factory=psycopg2.extras.RealDictCursor) as cur:
+            cur.execute(_SQL, {
+                "basic_ind_code": basic_ind_code,
+                "limit":          page_size,
+                "offset":         offset,
+            })
+            rows = cur.fetchall()
+    finally:
+        conn.close()
+
+    if not rows:
+        raise HTTPException(
+            status_code=404,
+            detail=f"No indicator data found for basic_ind_code: {basic_ind_code}",
+        )
+
+    total = rows[0]["total"]
+    stocks = [
+        IndustryIndicatorItem(**{k: v for k, v in row.items() if k != "total"})
+        for row in rows
+    ]
+
+    return IndustryIndicatorsResponse(
+        basic_ind_code=basic_ind_code,
+        page=page,
+        page_size=page_size,
+        total=total,
+        stocks=stocks,
     )
 
 

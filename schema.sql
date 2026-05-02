@@ -128,3 +128,14 @@ CREATE TABLE IF NOT EXISTS technical.screener_jobs (
     created_at       TIMESTAMP       NOT NULL DEFAULT NOW(),
     completed_at     TIMESTAMP
 );
+
+
+-- -----------------------------------------------------------------------------
+-- 5. Indexes on classification.company_classification
+--    Supports fast industry-based indicator lookups.
+-- -----------------------------------------------------------------------------
+CREATE INDEX IF NOT EXISTS idx_cc_basic_ind_code
+    ON classification.company_classification (basic_ind_code);
+
+CREATE INDEX IF NOT EXISTS idx_cc_company_id
+    ON classification.company_classification (company_id);
